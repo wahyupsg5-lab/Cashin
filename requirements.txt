@@ -1,0 +1,4 @@
+pybit>=5.7
+flask
+pandas
+numpy
