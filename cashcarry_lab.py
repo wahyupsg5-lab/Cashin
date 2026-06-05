@@ -149,6 +149,8 @@ def leverage_panel(spotC, perpC, ann_notional):
         rows.append((L, round(roc,2), round(liq_iso,1)))
     return bstat, dstat, rows
 
+# ---------- WEB ----------
+import threading, traceback
 from flask import Flask
 STATUS = {'state':'starting','msg':'worker belum mulai','report':None}
 
