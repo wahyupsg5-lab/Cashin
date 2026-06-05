@@ -130,8 +130,25 @@ def stats(r, per=365):
                 sharpe=round(sh,2), wr=round((r>0).mean()*100,1), maxDD=round(dd*100,1),
                 total=round(r.sum()*100,1))
 
-# ---------- WEB ----------
-import threading, traceback
+# ---------- PANEL LEVERAGE / risiko basis ----------
+def leverage_panel(spotC, perpC, ann_notional):
+    """Hitung dari data: distribusi basis (perp-spot), return-on-capital & jarak likuidasi per leverage.
+       Struktur modal: spot didanai penuh (L_spot=1), perp di-leverage L.
+       return-on-capital = ann_notional * L/(L+1)  (asimtot ke ann_notional, tak bisa lewat)."""
+    basis = (perpC - spotC) / spotC * 100.0          # % premium perp atas spot per coin/hari
+    b = basis.values.flatten(); b = b[~np.isnan(b)]
+    db = basis.diff().values.flatten(); db = np.abs(db[~np.isnan(db)])  # perubahan basis harian (%)
+    bstat = dict(mean=round(b.mean(),3), std=round(b.std(),3),
+                 p1=round(np.percentile(b,1),3), p99=round(np.percentile(b,99),3),
+                 min=round(b.min(),3), max=round(b.max(),3))
+    dstat = dict(std=round(db.std(),3), p99=round(np.percentile(db,99),3), max=round(db.max(),3))
+    rows = []
+    for L in [1,2,3,5,10]:
+        roc = ann_notional * L/(L+1)
+        liq_iso = (1.0/L)*100 - 0.5                   # % PUMP yg melikuidasi perp short (margin isolated)
+        rows.append((L, round(roc,2), round(liq_iso,1)))
+    return bstat, dstat, rows
+
 from flask import Flask
 STATUS = {'state':'starting','msg':'worker belum mulai','report':None}
 
@@ -180,6 +197,29 @@ def run_research():
         html.append('<p><b>Cara baca:</b> cash-carry seharusnya JAUH lebih konsisten per-kuartal daripada '
                     'carry perp-only. Kalau kuartal positif tinggi (≥8/9) dengan Sharpe stabil & maxDD kecil, '
                     'baru ini layak paper-trade. Funding positif% rendah = edge musiman, hati-hati.</p>')
+
+        # C. panel leverage + risiko basis
+        ann_notional = saved['always-on maker'][1]['ann']
+        bstat, dstat, rows = leverage_panel(spotC, perpC, ann_notional)
+        html.append('<h3>C. Leverage: return-on-capital vs risiko likuidasi</h3>')
+        html.append(f'<pre>Basis (premium perp atas spot, %): mean={bstat["mean"]} std={bstat["std"]} '
+                    f'p1={bstat["p1"]} p99={bstat["p99"]} min={bstat["min"]} max={bstat["max"]}\n'
+                    f'Perubahan basis harian |Δ| (%): std={dstat["std"]} p99={dstat["p99"]} max={dstat["max"]}\n\n')
+        html.append(f"{'leverage perp':<15}{'return-on-capital%':>20}{'PUMP yg likuidasi (isolated)':>32}\n")
+        for L, roc, liq in rows:
+            tag = '  <- bahaya pump' if liq < 25 else ''
+            html.append(f"{str(L)+'x':<15}{roc:>20.2f}{str(round(liq,1))+'%':>32}{tag}\n")
+        html.append('</pre>')
+        html.append('<p><b>Cara baca C — INI penentu sizing:</b><br>'
+                    '1. Return-on-capital <b>tak pernah lewat ann notional</b> (asimtot). Spot harus didanai penuh, '
+                    'jadi leverage perp cuma menggeser dari ~separuh menuju ~penuh ann. Mau lebih tinggi → harus '
+                    'margin spot juga = biaya pinjam + risiko likuidasi dua sisi (biasanya tak sepadan).<br>'
+                    '2. Kolom "PUMP yg likuidasi" = berlaku untuk <b>margin ISOLATED</b> (spot & perp terpisah). '
+                    'Di 5x/10x, pump 10–20% (sering terjadi di alt) bisa melikuidasi perp short padahal spot-mu untung '
+                    '— gain spot terdampar, hedge hilang. <b>Jangan isolated di leverage tinggi.</b><br>'
+                    '3. Pakai <b>UNIFIED/cross margin</b> (spot+perp satu akun) → gerak arah saling tutup, '
+                    'likuidasi hanya kalau BASIS melebar tajam. Lihat |Δ| basis p99/max di atas: itu ukuran risiko nyatamu. '
+                    'Kalau max basis-move ≪ 1/leverage, relatif aman.</p>')
 
         report='\n'.join(html)
         with open('report.html','w') as f: f.write(report)
